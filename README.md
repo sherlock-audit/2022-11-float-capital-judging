@@ -200,12 +200,177 @@ We could add checks to the epoch length on construction to ensure were safe
 
 
 
-# Issue M-2: Protocol won't work with `USDC` even though it is a token specifically mentioned in the docs 
+# Issue M-2: Funding Rate calculation is not correct 
+
+Source: https://github.com/sherlock-audit/2022-11-float-capital-judging/issues/33 
+
+## Found by 
+obront
+
+## Summary
+
+According to the docs, the Funding Rate is intended to correspond to the gap between long and short positions that the Float Pool is required to make up. However, as its implemented, the `totalFunding` is calculated only on the size of the overbalanced position, leading to some unexpected situations.
+
+## Vulnerability Detail
+
+According to the comments, `totalFunding` is meant to be calculated as follows:
+
+> totalFunding is calculated on the notional of between long and short liquidity and 2x long and short liquidity. 
+
+This makes sense. The purpose of the funding rate is to compensate the Float Pool for the liquidity provided to balance the market.
+
+However, the implementation of this function does not accomplish this. Instead, `totalFunding` is based only on the size of the `overbalancedValue`:
+
+```solidity
+uint256 totalFunding = (2 * overbalancedValue * fundingRateMultiplier * oracleManager.EPOCH_LENGTH()) / (365.25 days * 10000);
+```
+This can be summarized as `2 * overbalancedValue * funding rate percentage * epochs / yr`.
+
+This formula can cause problems, because the size of the overbalanced value doesn't necessarily correspond to the balancing required for the Float Pool. 
+
+For these examples, let's set:
+- `fundingRateMultiplier = 100` (1%)
+- `EPOCH_LENGTH() = 3.6525 days` (1% of a year)
+
+SITUATION A:
+- Overbalanced: LONG
+- Long Effective Liquidity: 1_000_000 ether
+- Short Effective Liquidity: 999_999 ether
+- `totalFunding = 2 * 1_000_000 ether * 1% * 1% = 200 ether`
+- Amount of balancing supplied by Float = 1mm - 999,999 = 1 ether
+
+SITUATION B:
+- Overbalanced: LONG
+- Long Effective Liquidity: 1_000 ether
+- Short Effective Liquidity: 100 ether
+- `totalFunding = 2 * 1_000 ether * 1% * 1% = 0.2 ether`
+- Amount of balancing supplied by Float = 1000 - 100 = 900 ether
+
+We can see that in Situation B, Float supplied 900X more liquidity to the system, and earned 1000X less fees.
+
+## Impact
+
+Funding Rates will not accomplish the stated objective, and will serve to incentivize pools that rely heavily on Float for balancing, while disincentivizing large, balanced markets.
+
+## Code Snippet
+
+https://github.com/sherlock-audit/2022-11-float-capital/blob/main/contracts/market/template/MarketCore.sol#L46-L58
+
+## Tool used
+
+Manual Review, Foundry
+
+## Recommendation
+
+Adjust the `totalFunding` formula to represent the stated outcome. A simple example of how that might be accomplished is below, but I'm sure there are better implementations:
+
+```solidity
+uint256 totalFunding = ((overbalancedValue - underbalancedValue) * fundingRateMultiplier * oracle.EPOCH_LENGTH()) / (365.25 days * 10_000);
+```
+
+## Discussion
+
+**JasoonS**
+
+It is acknowledged that this funding rate equation is just a placeholder for now.
+
+This typo of funding rate equation is desired if we want to incentivise market makers to always keep liquidity in the Float pool regardless of market balance.
+
+Our initial implementation was EXACTLY the same as what you wrote in the recommendation (and it is exactly what has been deployed live for the alpha version of the protocol for the last year). But after talks with market makers it became clear that they want 'guaranteed' returns of sorts even if the market is balanced to keep their funds there.
+
+We have (since audit) refined an updated equation that is a hybrid of the two extremes. This is some of the core logic that we'll have to keep iterating on to make float work. It is the magic sauce.
+
+Apologies for that mistake in the comments. The comments also say: `This modular function is logical but naive implementation that will likely change somewhat upon more indepth modelling results that are still pending.`
+
+TLDR - this is as intended and the shortcomings are known.
+
+**Evert0x**
+
+Downgrading to informational as the docs on which this issue is based also indicate that it's a placeholder. Issue doesn't make a case for med/high in case the formula makes it to production.
+
+**zobront**
+
+Escalate for 5 USDC
+
+It seems like quite a stretch to claim that the current implementation is a placeholder. The exact quote in the docs is:
+
+> This modular function is logical but naive implementation that will likely change somewhat upon more indepth modelling results that are still pending.
+
+This clearly states that the function is supposed to accomplish what they state it will accomplish. They acknowledge it may change, but specifically lay out what the function should do and claim that it does it.
+
+If saying “this is right but may change somewhat” disqualifies valid issues, then anything that says that should not be in scope. So I feel it is very clear that the report does find a real issue in the code.
+
+Now, I understand that if this was just an issue with the docs, it’d be informational. That’s fair.
+
+But the actual implementation isn’t an “alternative”. It’s a totally invalid way to implement the function that would cause harm to the platform.
+
+The goal of the function is to ensure the Float pool is compensated for the real risk that it is taking on. If it is substantially underpaid (as it would be in many cases with the erroneous formula), it can easily cause the pool to lose funds. The formula doesn't accomplish the objective that is needed from it, and it puts the protocol's own funds at risk.
+
+The fact that, since the audit, they have updated the equation seems to imply that they agree that the implementation in the audit code was untenable. 
+
+So it seems clear to me that:
+a) the issue is a real mismatch between explicitly intended behavior and the code
+b) it would cause real harm if it was deployed as written
+
+Therefore, I believe a severity of Medium is justified.
+
+**sherlock-admin**
+
+ > Escalate for 5 USDC
+> 
+> It seems like quite a stretch to claim that the current implementation is a placeholder. The exact quote in the docs is:
+> 
+> > This modular function is logical but naive implementation that will likely change somewhat upon more indepth modelling results that are still pending.
+> 
+> This clearly states that the function is supposed to accomplish what they state it will accomplish. They acknowledge it may change, but specifically lay out what the function should do and claim that it does it.
+> 
+> If saying “this is right but may change somewhat” disqualifies valid issues, then anything that says that should not be in scope. So I feel it is very clear that the report does find a real issue in the code.
+> 
+> Now, I understand that if this was just an issue with the docs, it’d be informational. That’s fair.
+> 
+> But the actual implementation isn’t an “alternative”. It’s a totally invalid way to implement the function that would cause harm to the platform.
+> 
+> The goal of the function is to ensure the Float pool is compensated for the real risk that it is taking on. If it is substantially underpaid (as it would be in many cases with the erroneous formula), it can easily cause the pool to lose funds. The formula doesn't accomplish the objective that is needed from it, and it puts the protocol's own funds at risk.
+> 
+> The fact that, since the audit, they have updated the equation seems to imply that they agree that the implementation in the audit code was untenable. 
+> 
+> So it seems clear to me that:
+> a) the issue is a real mismatch between explicitly intended behavior and the code
+> b) it would cause real harm if it was deployed as written
+> 
+> Therefore, I believe a severity of Medium is justified.
+
+You've created a valid escalation for 5 USDC!
+
+To remove the escalation from consideration: Delete your comment.
+To change the amount you've staked on this escalation: Edit your comment **(do not create a new comment)**.
+
+You may delete or edit your escalation comment anytime before the 48-hour escalation window closes. After that, the escalation becomes final.
+
+**hrishibhat**
+
+Escalation accepted. 
+
+
+
+**sherlock-admin**
+
+> Escalation accepted. 
+> 
+> 
+
+This issue's escalations have been accepted!
+
+Contestants' payouts and scores will be updated according to the changes made on this issue.
+
+
+
+# Issue M-3: Protocol won't work with `USDC` even though it is a token specifically mentioned in the docs 
 
 Source: https://github.com/sherlock-audit/2022-11-float-capital-judging/issues/21 
 
 ## Found by 
-pashov, ctf\_sec, 0x52
+ctf\_sec, pashov, 0x52
 
 ## Summary
 The protocol has requirements for values (for example 1e18) that would be too big if used with a 6 decimals token like `USDC` - `USDC` is mentioned as a token that will be used in the docs
