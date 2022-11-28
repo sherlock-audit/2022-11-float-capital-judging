@@ -1,4 +1,73 @@
-# Issue H-1: An update gap in Chainlink's feed can malfunction the whole market 
+# Issue M-1: Unsafe type casting of `poolValue` can malfunction the whole market 
+
+Source: https://github.com/sherlock-audit/2022-11-float-capital-judging/issues/45 
+
+## Found by 
+WATCHPUG
+
+## Summary
+
+When `poolValue` is a negative number due to loss in `valueChange` and `funding`, the unsafe type casting from `int256` to `uint256` will result in a huge number close to `2**255` which will revert `_rebalancePoolsAndExecuteBatchedActions()` due to overflow when multiplied by 1e18 at L163.
+
+## Vulnerability Detail
+
+If the funding rate is 100% per year and the `EPOCH_LENGTH` is 4 days, the funding fee for each epoch can be as much as ~1% on the effectiveValue.
+
+Plus, the loss from `valueChange` is capped at 99%, but combining both can still result in a negative `poolValue` at L146.
+
+At L163 `uint256 price = uint256(poolValue).div(tokenSupply);` the type casting from `int256` to `uint256` will result in a huge number close to `2**255`.
+
+`MathUintFloat.div()` will overflow when a number as large as `2**255` is multiplied by 1e18.
+
+## Impact
+
+`_rebalancePoolsAndExecuteBatchedActions` will revert and cause the malfunction of the whole market.
+
+## Code Snippet
+
+https://github.com/sherlock-audit/2022-11-float-capital/blob/main/contracts/market/template/MarketCore.sol#L118-L185
+
+## Tool used
+
+Manual Review
+
+## Recommendation
+
+Consider adding a new function to properly handle the bankruptcy of a specific pool.
+
+## Discussion
+
+**JasoonS**
+
+We seed the pools initially with sufficient un-extractable capital such that this shouldn't be an issue (it should never get close to 0 - even after millions of years and trillions of transactions that may have rounding down and all users withdrawing their funds).
+
+We could create a safe cast function to check - but we made `poolValue` an int256 so that it is easier to operate on with other signed integers - not because it is ever possible for it to be negative. So it would be redundant in this case.
+
+**moose-code**
+
+@JasoonS Want to relook at this. @WooSungD @Stentonian maybe you also have thoughts. 
+
+I believe watchpug is explaining something different. 
+
+They are saying that poolValue can be negative, as a 99% capped loss of poolValue, in conjunction with a 1% funding fee (imagine the side is very overbalanced), will result in the pool value losing more than 100% in total. 
+
+A safe guard would be to check that with BOTH funding and value change, 99% is the maximum a pool can lose in any single iteration. 
+
+Given system parameterizations, where epoch length will never be that long and funding rate should never be that high, its unlikely this would be an issue in practice, but likely still worth making a change for. 
+
+Let me know if anyone has thoughts 
+
+**JasoonS**
+
+Yes, you're right, went through these too fast.
+
+We've discussed this internally a few times. This point should've made it into the readme.
+
+We could add checks to the epoch length on construction to ensure were safe
+
+
+
+# Issue M-2: An update gap in Chainlink's feed can malfunction the whole market 
 
 Source: https://github.com/sherlock-audit/2022-11-float-capital-judging/issues/42 
 
@@ -129,78 +198,13 @@ This would be extremely expensive and simply cause the market to deprecate (no f
 
 We still think this is a high severity issue as it can make the protocol malfunction
 
+**Evert0x**
 
-
-# Issue M-1: Unsafe type casting of `poolValue` can malfunction the whole market 
-
-Source: https://github.com/sherlock-audit/2022-11-float-capital-judging/issues/45 
-
-## Found by 
-WATCHPUG
-
-## Summary
-
-When `poolValue` is a negative number due to loss in `valueChange` and `funding`, the unsafe type casting from `int256` to `uint256` will result in a huge number close to `2**255` which will revert `_rebalancePoolsAndExecuteBatchedActions()` due to overflow when multiplied by 1e18 at L163.
-
-## Vulnerability Detail
-
-If the funding rate is 100% per year and the `EPOCH_LENGTH` is 4 days, the funding fee for each epoch can be as much as ~1% on the effectiveValue.
-
-Plus, the loss from `valueChange` is capped at 99%, but combining both can still result in a negative `poolValue` at L146.
-
-At L163 `uint256 price = uint256(poolValue).div(tokenSupply);` the type casting from `int256` to `uint256` will result in a huge number close to `2**255`.
-
-`MathUintFloat.div()` will overflow when a number as large as `2**255` is multiplied by 1e18.
-
-## Impact
-
-`_rebalancePoolsAndExecuteBatchedActions` will revert and cause the malfunction of the whole market.
-
-## Code Snippet
-
-https://github.com/sherlock-audit/2022-11-float-capital/blob/main/contracts/market/template/MarketCore.sol#L118-L185
-
-## Tool used
-
-Manual Review
-
-## Recommendation
-
-Consider adding a new function to properly handle the bankruptcy of a specific pool.
-
-## Discussion
-
-**JasoonS**
-
-We seed the pools initially with sufficient un-extractable capital such that this shouldn't be an issue (it should never get close to 0 - even after millions of years and trillions of transactions that may have rounding down and all users withdrawing their funds).
-
-We could create a safe cast function to check - but we made `poolValue` an int256 so that it is easier to operate on with other signed integers - not because it is ever possible for it to be negative. So it would be redundant in this case.
-
-**moose-code**
-
-@JasoonS Want to relook at this. @WooSungD @Stentonian maybe you also have thoughts. 
-
-I believe watchpug is explaining something different. 
-
-They are saying that poolValue can be negative, as a 99% capped loss of poolValue, in conjunction with a 1% funding fee (imagine the side is very overbalanced), will result in the pool value losing more than 100% in total. 
-
-A safe guard would be to check that with BOTH funding and value change, 99% is the maximum a pool can lose in any single iteration. 
-
-Given system parameterizations, where epoch length will never be that long and funding rate should never be that high, its unlikely this would be an issue in practice, but likely still worth making a change for. 
-
-Let me know if anyone has thoughts 
-
-**JasoonS**
-
-Yes, you're right, went through these too fast.
-
-We've discussed this internally a few times. This point should've made it into the readme.
-
-We could add checks to the epoch length on construction to ensure were safe
+Downgrading to medium severity as it's clear to the judges a large part of the protocol is specifically engineered to handle this case.
 
 
 
-# Issue M-2: Funding Rate calculation is not correct 
+# Issue M-3: Funding Rate calculation is not correct 
 
 Source: https://github.com/sherlock-audit/2022-11-float-capital-judging/issues/33 
 
@@ -365,12 +369,12 @@ Contestants' payouts and scores will be updated according to the changes made on
 
 
 
-# Issue M-3: Protocol won't work with `USDC` even though it is a token specifically mentioned in the docs 
+# Issue M-4: Protocol won't work with `USDC` even though it is a token specifically mentioned in the docs 
 
 Source: https://github.com/sherlock-audit/2022-11-float-capital-judging/issues/21 
 
 ## Found by 
-ctf\_sec, pashov, 0x52
+pashov, ctf\_sec, 0x52
 
 ## Summary
 The protocol has requirements for values (for example 1e18) that would be too big if used with a 6 decimals token like `USDC` - `USDC` is mentioned as a token that will be used in the docs
