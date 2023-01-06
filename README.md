@@ -65,6 +65,16 @@ We've discussed this internally a few times. This point should've made it into t
 
 We could add checks to the epoch length on construction to ensure were safe
 
+**JasoonS**
+
+Nothing to change here.
+
+The epochs would need to be many days long at least for the funding to be close high enough for this to be an issue in the black swan event of a single price change delta being greater than the max change (33% percent).
+
+I believe this to be an informational issue. We could've made it explicit in the readme. But the Video walkthrough implies that the epoch length would be an hour or shorter.
+
+TLDR if the markets are configured correctly, this is a mathematical impossibility. We have plenty of lee-way with current config.
+
 
 
 # Issue M-2: An update gap in Chainlink's feed can malfunction the whole market 
@@ -201,6 +211,10 @@ We still think this is a high severity issue as it can make the protocol malfunc
 **Evert0x**
 
 Downgrading to medium severity as it's clear to the judges a large part of the protocol is specifically engineered to handle this case.
+
+**rcstanciu**
+
+Prior discussion of this issue before the audit can be found here: https://github.com/sherlock-audit/2022-11-float-capital/blob/090c1096aacc0e7dc31bc1d00a82357f9c76fbd4/README.md?plain=1#L163 and https://youtu.be/UjgqyKQSz7s?t=1619
 
 
 
@@ -367,6 +381,39 @@ This issue's escalations have been accepted!
 
 Contestants' payouts and scores will be updated according to the changes made on this issue.
 
+**JasoonS**
+
+For the record I disagree that this is a vulnerability. This implementation makes some trade-offs. 
+
+Anyway, we have made another interim adaptation to the incentives https://github.com/Float-Capital/monorepo/pull/3833 - it also has its own trade-offs just like this implementation.
+
+**jacksanford1**
+
+From WatchPug:
+
+> The formula for funding fee does not take the actual service provided by the float pool, i.e., the amount of matching funds from the float pool, into consideration.
+> 
+> Therefore, in certain cases, the other two pools (l/s) may end up paying more funding fee than expected.
+> 
+> PoC
+>
+> Given:
+> Funding multipler is 5% APR;
+> Epoch length is 1 day.
+> The long side intended to open a $1M position at 5x leverage, the effectiveValueLong is $5M.
+> There is only $10 position on the short side and $10 liquidity in the float pool.
+> While the float pool can only provide $50 liquidity to the long side, the funding fee charged is: ($5M + $10) * 5% * 5 * 1 day / 1 year
+>
+> Recommendation
+> The amount of funding fee should be charged based on the amount of liquidity provided by the float pool, ie, $50 in the above case.
+
+**jacksanford1**
+
+Acknowledged by Float:
+
+> We could put a cap on the maximum funding the 'tranche/Float pool' can earn, but how it is now will be a strong incentive for market makers to put more funds to get the two sides in balance again. I'll discuss this more with the team, but I think this is what we decided before.
+> It is true that our system takes some time to respond to massive (relative to the current market size) injections of liquidity into a single side, but in normal running the Float pool should absorb most of that.
+
 
 
 # Issue M-4: Protocol won't work with `USDC` even though it is a token specifically mentioned in the docs 
@@ -410,6 +457,16 @@ We could fetch the `decimals` from the payment token on initialization, but hone
 **Evert0x**
 
 As USDC was explicitly mentioned by the protocol we would like to reward this finding.
+
+**JasoonS**
+
+Fix PR: https://github.com/Float-Capital/monorepo/pull/3812 and relevant comment
+
+Relevant comment: https://github.com/sherlock-audit/2022-11-float-capital/pull/10#discussion_r1035993867
+
+**jacksanford1**
+
+Note: Fix accepted by WatchPug
 
 
 
